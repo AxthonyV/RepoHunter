@@ -1,20 +1,24 @@
+﻿import os
+import platform
 import subprocess
-import os
 import sys
 import time
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
+from pathlib import Path
 
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.prompt import Prompt, IntPrompt
-from rich.text import Text
-from rich.live import Live
+from bs4 import BeautifulSoup
 from rich.align import Align
+from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
+from rich.prompt import IntPrompt, Prompt
+from rich.table import Table
+from rich.text import Text
 
 console = Console()
 MAX_REPOS_TO_SAVE = 15
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_FILE = BASE_DIR / "daily_trends.md"
 
 # --- Translations Dictionary ---
 LANGUAGES = {
@@ -35,10 +39,15 @@ TEXTS = {
         "opt_once": "[5] Once       (Run and exit)",
         "prompt_choice": "Choose an option",
         "prompt_custom": "Enter wait time in seconds",
-        "err_obscura": "Error: Obscura executable not found at",
+        "err_obscura_not_found": "Error: Obscura executable not found at",
+        "err_obscura_not_file": "Error: Obscura path exists but is not a file:",
+        "err_obscura_not_executable": "Error: Obscura file is not executable. Use chmod +x if needed.",
+        "err_obscura_failed": "Error: Obscura failed to run.",
+        "err_obscura_invalid_output": "Error: Obscura returned no valid HTML.",
         "status_scraping": "Stealthily navigating GitHub (Obscura Stealth)...",
-        "err_critical": "Critical error running Obscura:",
+        "err_critical": "Critical error:",
         "err_no_repos": "No repositories found.",
+        "err_html_schema": "Warning: GitHub HTML structure may have changed.",
         "table_title": "📈 Top RepoHunter Finds",
         "col_repo": "Repository",
         "col_lang": "Language",
@@ -70,10 +79,15 @@ TEXTS = {
         "opt_once": "[5] Una vez    (Ejecutar y salir)",
         "prompt_choice": "Elige una opción",
         "prompt_custom": "Ingresa los segundos de espera",
-        "err_obscura": "Error: No se encontró el ejecutable de Obscura en",
+        "err_obscura_not_found": "Error: No se encontró el ejecutable de Obscura en",
+        "err_obscura_not_file": "Error: La ruta de Obscura existe pero no es un archivo:",
+        "err_obscura_not_executable": "Error: El archivo de Obscura no es ejecutable. Usa chmod +x si es necesario.",
+        "err_obscura_failed": "Error: Obscura no pudo ejecutarse.",
+        "err_obscura_invalid_output": "Error: Obscura no devolvió HTML válido.",
         "status_scraping": "Navegando sigilosamente por GitHub (Obscura Stealth)...",
-        "err_critical": "Error crítico al ejecutar Obscura:",
+        "err_critical": "Error crítico:",
         "err_no_repos": "No se encontraron repositorios.",
+        "err_html_schema": "Advertencia: la estructura HTML de GitHub puede haber cambiado.",
         "table_title": "📈 Top RepoHunter Tendencias",
         "col_repo": "Repositorio",
         "col_lang": "Lenguaje",
@@ -105,10 +119,15 @@ TEXTS = {
         "opt_once": "[5] Uma vez    (Executar e sair)",
         "prompt_choice": "Escolha uma opção",
         "prompt_custom": "Insira o tempo de espera em segundos",
-        "err_obscura": "Erro: Executável Obscura não encontrado em",
+        "err_obscura_not_found": "Erro: Executável Obscura não encontrado em",
+        "err_obscura_not_file": "Erro: O caminho do Obscura existe mas não é um arquivo:",
+        "err_obscura_not_executable": "Erro: O arquivo Obscura não é executável. Use chmod +x se necessário.",
+        "err_obscura_failed": "Erro: Obscura não pôde ser executado.",
+        "err_obscura_invalid_output": "Erro: Obscura não retornou HTML válido.",
         "status_scraping": "Navegando furtivamente no GitHub (Obscura Stealth)...",
-        "err_critical": "Erro crítico ao executar Obscura:",
+        "err_critical": "Erro crítico:",
         "err_no_repos": "Nenhum repositório encontrado.",
+        "err_html_schema": "Aviso: a estrutura HTML do GitHub pode ter mudado.",
         "table_title": "📈 Top RepoHunter Tendências",
         "col_repo": "Repositório",
         "col_lang": "Linguagem",
@@ -119,7 +138,7 @@ TEXTS = {
         "report_intro": "Aqui está a nata dos repositórios de hoje. Analise as descrições e escolha a melhor joia para seu público.\n\n",
         "md_desc": "**📝 Descrição:**",
         "md_lang": "**💻 Linguagem:**",
-        "md_stars": "**⭐ Estrelas (hoje):**",
+        "md_stars": "**⭐ Estrelas (hoy):**",
         "success_saved": "Relatório salvo com sucesso em:",
         "sleep_active": "💤 Modo de suspensão ativo. Próxima verificação em: ",
         "sleep_exit": " (Ctrl+C para sair)",
@@ -131,7 +150,8 @@ TEXTS = {
     }
 }
 
-t = TEXTS["en"] # Default to English
+t = TEXTS["en"]  # Default to English
+
 
 def print_banner():
     banner = f"""[bold cyan]
@@ -144,15 +164,17 @@ def print_banner():
 """
     console.print(Panel(Align.center(banner), border_style="cyan"))
 
+
 def get_language():
     global t
     console.print("\n[bold yellow]🌍 Select Language / Selecciona Idioma / Selecione o Idioma[/bold yellow]")
     console.print("[1] [bold blue]English[/bold blue]")
     console.print("[2] [bold green]Español[/bold green]")
     console.print("[3] [bold magenta]Português[/bold magenta]\n")
-    
+
     choice = Prompt.ask("Choose / Elige / Escolha", choices=["1", "2", "3"], default="1")
     t = TEXTS[LANGUAGES[choice]]
+
 
 def get_user_interval():
     console.print(f"\n[bold yellow]{t['interval_title']}[/bold yellow]")
@@ -161,9 +183,9 @@ def get_user_interval():
     console.print(f"[bold magenta]{t['opt_slow']}[/bold magenta]")
     console.print(f"[bold cyan]{t['opt_custom']}[/bold cyan]")
     console.print(f"[bold red]{t['opt_once']}[/bold red]\n")
-    
+
     choice = Prompt.ask(t['prompt_choice'], choices=["1", "2", "3", "4", "5"], default="2")
-    
+
     if choice == "1":
         return 600
     elif choice == "2":
@@ -175,169 +197,271 @@ def get_user_interval():
     elif choice == "5":
         return -1
 
-import platform
 
-def get_obscura_path():
+def get_obscura_path() -> Path:
     system = platform.system().lower()
     if system == "windows":
-        return os.path.join("obscura-windows", "obscura.exe")
-    elif system == "darwin":
-        return os.path.join("obscura-macos", "obscura")
-    elif system == "linux":
-        return os.path.join("obscura-linux", "obscura")
-    return None
+        return BASE_DIR / "obscura-windows" / "obscura.exe"
+    if system == "darwin":
+        return BASE_DIR / "obscura-macos" / "obscura"
+    if system == "linux":
+        return BASE_DIR / "obscura-linux" / "obscura"
+    return BASE_DIR / "obscura"
+
+
+def validate_obscura_executable(obscura_path: Path) -> bool:
+    if not obscura_path.exists():
+        console.print(f"\n[bold red]❌ {t['err_obscura_not_found']}[/bold red] [yellow]{obscura_path}[/yellow]")
+        return False
+
+    if not obscura_path.is_file():
+        console.print(f"\n[bold red]❌ {t['err_obscura_not_file']}[/bold red] [yellow]{obscura_path}[/yellow]")
+        return False
+
+    if obscura_path.suffix != ".exe" and os.name != "nt":
+        if not os.access(obscura_path, os.X_OK):
+            console.print(f"\n[bold red]❌ {t['err_obscura_not_executable']}[/bold red] [yellow]{obscura_path}[/yellow]")
+            return False
+
+    return True
+
+
+def extract_repo_info(article):
+    for selector in ["h2 a", "h1 a", "a"]:
+        for link in article.select(selector):
+            href = link.get("href")
+            if not href or not href.startswith("/"):
+                continue
+            parts = href.strip("/").split("/")
+            if len(parts) >= 2:
+                title = " ".join(link.get_text(strip=True).split())
+                return title, f"https://github.com{href.strip()}"
+    return None, None
+
+
+def extract_description(article):
+    description = article.find("p")
+    if description:
+        return description.get_text(strip=True)
+
+    alt_description = article.select_one("div[class*='color-fg-muted'], div[class*='text-gray']")
+    if alt_description:
+        return alt_description.get_text(strip=True)
+
+    return t["no_desc"]
+
+
+def extract_language(article):
+    lang_span = article.find(attrs={"itemprop": "programmingLanguage"})
+    if lang_span:
+        return lang_span.get_text(strip=True)
+
+    alt_lang = article.select_one("span[class*='programmingLanguage'], span[class*='color-fg-muted']")
+    if alt_lang:
+        return alt_lang.get_text(strip=True)
+
+    return t["unknown_lang"]
+
+
+def extract_stars_today(article):
+    for node in article.select("span.float-sm-right, span[class*='float-sm-right'], span[class*='stars']"):
+        text = node.get_text(" ", strip=True)
+        if "stars today" in text.lower():
+            return text.lower().replace("stars today", "").strip()
+
+    all_text = article.get_text(" ", strip=True)
+    import re
+    match = re.search(r"([0-9,]+)\s*stars\s*today", all_text, re.I)
+    if match:
+        return match.group(1)
+
+    return "N/A"
+
 
 def fetch_trending_repos():
     obscura_path = get_obscura_path()
-    
-    if not obscura_path or not os.path.exists(obscura_path):
-        console.print(f"\n[bold red]❌ {t['err_obscura']}[/bold red] [yellow]{obscura_path}[/yellow]")
-        console.print("[bold red]Please ensure you have downloaded the correct Obscura binary for your OS.[/bold red]")
-        sys.exit(1)
+
+    if not validate_obscura_executable(obscura_path):
+        console.print("[bold red]Please ensure the correct Obscura binary is available for your OS.[/bold red]")
+        return []
 
     command = [
-        obscura_path,
+        str(obscura_path),
         "fetch",
         "https://github.com/trending",
         "--stealth",
-        "--wait-until", "networkidle0",
-        "--dump", "html"
+        "--wait-until",
+        "networkidle0",
+        "--dump",
+        "html",
     ]
 
     try:
-        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            console.print(f"\n[bold red]❌ {t['err_obscura_failed']}[/bold red]")
+            error_text = result.stderr.strip() or result.stdout.strip()
+            if error_text:
+                console.print(f"[yellow]{error_text}[/yellow]")
+            return []
+
         html_content = result.stdout
-        
-        start_html = html_content.find('<html')
+        if not html_content or "<html" not in html_content.lower():
+            console.print(f"\n[bold red]❌ {t['err_obscura_invalid_output']}[/bold red]")
+            return []
+
+        start_html = html_content.find("<html")
         if start_html != -1:
             html_content = html_content[start_html:]
-        
-        soup = BeautifulSoup(html_content, 'html.parser')
-        articles = soup.find_all('article', class_='Box-row')
-        
+
+        soup = BeautifulSoup(html_content, "html.parser")
+        articles = soup.find_all("article", class_="Box-row")
+
+        if not articles:
+            articles = soup.select("article")
+
+        if not articles:
+            console.print(f"\n[bold yellow]⚠️ {t['err_html_schema']}[/bold yellow]")
+            return []
+
         repos = []
         for article in articles:
-            h2 = article.find('h2')
-            if not h2: continue
-            a_tag = h2.find('a')
-            if not a_tag: continue
-            
-            title = a_tag.get_text(strip=True).replace('\n', '').replace(' ', '')
-            url = 'https://github.com' + (a_tag.get('href') or '')
-            
-            p_tag = article.find('p')
-            description = p_tag.get_text(strip=True) if p_tag else t['no_desc']
-            
-            lang_span = article.find('span', itemprop='programmingLanguage')
-            language = lang_span.get_text(strip=True) if lang_span else t['unknown_lang']
-            
-            stars_today = "N/A"
-            for svg in article.find_all('svg', class_='octicon-star'):
-                parent_span = svg.find_parent('span', class_='float-sm-right')
-                if parent_span:
-                    stars_today = parent_span.get_text(strip=True).replace('stars today', '').strip()
-                    break
-            
-            repos.append({
-                'title': title,
-                'url': url,
-                'description': description,
-                'language': language,
-                'stars_today': stars_today
-            })
-            
+            title, url = extract_repo_info(article)
+            if not title or not url:
+                continue
+
+            description = extract_description(article)
+            language = extract_language(article)
+            stars_today = extract_stars_today(article)
+
+            repos.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "description": description,
+                    "language": language,
+                    "stars_today": stars_today,
+                }
+            )
+
+        if not repos:
+            console.print(f"\n[bold yellow]⚠️ {t['err_html_schema']}[/bold yellow]")
+
         return repos
-            
-    except Exception as e:
-        console.print(f"\n[bold red]❌ {t['err_critical']}[/bold red] {e}")
+
+    except subprocess.TimeoutExpired:
+        console.print(f"\n[bold red]❌ {t['err_obscura_failed']}[/bold red] Timeout expired while waiting for Obscura.")
+        return []
+    except Exception as exc:
+        console.print(f"\n[bold red]❌ {t['err_critical']}[/bold red] {exc}")
         return []
 
-def display_and_save(repos, filename="daily_trends.md"):
+
+def display_and_save(repos, filename: Path = OUTPUT_FILE):
     if not repos:
         console.print(f"[bold red]❌ {t['err_no_repos']}[/bold red]")
         return
 
     table = Table(title=f"[bold white]{t['table_title']}[/bold white]", show_header=True, header_style="bold cyan")
     table.add_column("#", style="dim", width=3)
-    table.add_column(t['col_repo'], style="green", width=30)
-    table.add_column(t['col_lang'], style="magenta")
-    table.add_column(t['col_stars'], justify="right", style="yellow")
-    table.add_column(t['col_desc'], style="white", overflow="fold")
+    table.add_column(t["col_repo"], style="green", width=30)
+    table.add_column(t["col_lang"], style="magenta")
+    table.add_column(t["col_stars"], justify="right", style="yellow")
+    table.add_column(t["col_desc"], style="white", overflow="fold")
 
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(t['report_title'])
-        f.write(t['report_update'].format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        f.write(t['report_intro'])
-        f.write("---\n\n")
-
-        for i, repo in enumerate(repos[:MAX_REPOS_TO_SAVE], 1):
-            table.add_row(
-                str(i),
-                repo['title'],
-                repo['language'],
-                repo['stars_today'],
-                repo['description'][:70] + "..." if len(repo['description']) > 70 else repo['description']
-            )
-
-            f.write(f"### {i}. [{repo['title']}]({repo['url']})\n\n")
-            f.write(f"{t['md_desc']} {repo['description']}\n\n")
-            f.write(f"{t['md_lang']} `{repo['language']}` | {t['md_stars']} `{repo['stars_today']}`\n\n")
+    try:
+        with filename.open("w", encoding="utf-8") as f:
+            f.write(t["report_title"])
+            f.write(t["report_update"].format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            f.write(t["report_intro"])
             f.write("---\n\n")
+
+            for i, repo in enumerate(repos[:MAX_REPOS_TO_SAVE], 1):
+                short_desc = repo["description"]
+                if len(short_desc) > 70:
+                    short_desc = short_desc[:70] + "..."
+
+                table.add_row(
+                    str(i),
+                    repo["title"],
+                    repo["language"],
+                    repo["stars_today"],
+                    short_desc,
+                )
+
+                f.write(f"### {i}. [{repo['title']}]({repo['url']})\n\n")
+                f.write(f"{t['md_desc']} {repo['description']}\n\n")
+                f.write(f"{t['md_lang']} `{repo['language']}` | {t['md_stars']} `{repo['stars_today']}`\n\n")
+                f.write("---\n\n")
+
+    except OSError as exc:
+        console.print(f"\n[bold red]❌ {t['err_critical']}[/bold red] {exc}")
+        return
 
     console.print()
     console.print(table)
     console.print(f"\n[bold green]✅ {t['success_saved']}[/bold green] [bold white]{filename}[/bold white]")
 
-def countdown_sleep(seconds):
+
+def countdown_sleep(seconds: int):
     target_time = datetime.now() + timedelta(seconds=seconds)
-    
+
     with Live(refresh_per_second=1) as live:
         while True:
             now = datetime.now()
             if now >= target_time:
                 break
-            
+
             remaining = target_time - now
             mins, secs = divmod(remaining.seconds, 60)
             hours, mins = divmod(mins, 60)
-            
+
             time_str = f"{hours:02d}:{mins:02d}:{secs:02d}"
-            
+
             status_text = Text()
-            status_text.append(t['sleep_active'], style="dim")
+            status_text.append(t["sleep_active"], style="dim")
             status_text.append(time_str, style="bold yellow")
-            status_text.append(t['sleep_exit'], style="dim")
-            
+            status_text.append(t["sleep_exit"], style="dim")
+
             live.update(Panel(status_text, border_style="dim"))
             time.sleep(1)
 
+
 def main():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    os.system("cls" if os.name == "nt" else "clear")
     get_language()
-    
-    os.system('cls' if os.name == 'nt' else 'clear')
+
+    os.system("cls" if os.name == "nt" else "clear")
     print_banner()
     interval = get_user_interval()
-    
+
     while True:
         console.rule(f"[bold cyan]🔍 {t['scan_start']} - {datetime.now().strftime('%H:%M:%S')}[/bold cyan]")
-        
+
         with console.status(f"[bold green]{t['status_scraping']}[/bold green]", spinner="dots12"):
             repos = fetch_trending_repos()
-            
+
         if repos:
             display_and_save(repos)
-        
+
         if interval == -1:
             console.print(f"\n[bold green]{t['mode_once_done']}[/bold green]")
             break
-            
+
         try:
             console.print()
             countdown_sleep(interval)
         except KeyboardInterrupt:
             console.print(f"\n[bold red]{t['user_interrupt']}[/bold red]")
             break
+
 
 if __name__ == "__main__":
     main()
