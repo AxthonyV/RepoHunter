@@ -167,6 +167,11 @@ Distributed under the **MIT License**. See `LICENSE` for details.
 
 ## 📸 Preview
 
+<p align="center">
+  <img width="100%" alt="RepoHunter CLI Terminal Preview" src="https://raw.githubusercontent.com/AxthonyV/RepoHunter/main/preview/RepoHunter.png" />
+</p>
+
+---
 ---
 
 ## 👤 Author
